@@ -35,41 +35,30 @@ def extract_text(file_path):
     )
     job_id = response['JobId']
     logging.info(f"JobId: {job_id}")
-    time.sleep(5)
     get_job_response = textract.get_document_text_detection(JobId=job_id)
-    logging.info(f"job status: {get_job_response}")
     status = get_job_response['JobStatus']
 
     latest_get_job_response = None
     while status != "SUCCEEDED":
-        time.sleep(5)
         get_job_response = textract.get_document_text_detection(JobId=job_id)
         logging.info(f"job status: {get_job_response}")
         status = get_job_response['JobStatus']
         latest_get_job_response = get_job_response
 
     logging.info(f"job {job_id} completed successfully")
-    time.sleep(5)
     all_blocks = []
-    logging.info(f"type get_job_response: {type(latest_get_job_response)}")
-    logging.info(f"latest get_job_response: {latest_get_job_response}")
     blocks = latest_get_job_response['Blocks']
-    logging.info(f"length of blocks: {len(blocks)}")
     all_blocks.extend(blocks)
     while 'NextToken' in get_job_response and len(get_job_response['NextToken']) > 0:
-        time.sleep(5)
         logging.info(f"processing next_token: {get_job_response['NextToken']}")
         get_job_response = textract.get_document_text_detection(JobId=job_id, NextToken=get_job_response['NextToken'])
-        logging.info(f"response from the token: {get_job_response}")
         blocks = get_job_response['Blocks']
         all_blocks.extend(blocks)
 
-    logging.info(f"all blocks processed successfully.")
     return all_blocks
 
 def upload_file(file_path):
     logging.info("Uploading file")
-    print("Uploading file")
     with open(file_path, "rb") as file_obj:
         basename = os.path.basename(file_path)
         s3.upload_fileobj(file_obj, s3_bucket, f"{s3_input_prefix}/{basename}")
@@ -174,8 +163,7 @@ with gr.Blocks() as demo:
                       inputs=[out, temperature, prompt, lines_per_scene, strides, max_tokens],
                       outputs=script_summary_output)
 
-demo.queue()
 if 'GRADIO_USERNAME' in os.environ and 'GRADIO_PASSWORD' in os.environ:
-    demo.launch(server_name="0.0.0.0", share=False, auth=(os.environ['GRADIO_USERNAME'], os.environ['GRADIO_PASSWORD']))
+    demo.queue().launch(server_name="0.0.0.0", share=False, auth=(os.environ['GRADIO_USERNAME'], os.environ['GRADIO_PASSWORD']))
 else:
-    demo.launch(server_name="0.0.0.0", share=False)
+    demo.queue().launch(server_name="0.0.0.0", share=False)
