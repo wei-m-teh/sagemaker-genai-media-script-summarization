@@ -111,8 +111,6 @@ def generate_summary(prompt, numResults=1, temperature=0.1, max_tokens=70):
 
 def summarize_script(script, temperature, prompt, lines_per_scene, strides, max_tokens):
     lines = script.split("\n")
-    print(f"line numbers: {len(lines)}")
-    print(lines[0])
     summaries = []
     for starting_line in range(0, len(lines), int(strides)):
         lines_to_be_summarized = lines[starting_line: starting_line + int(lines_per_scene)]
@@ -137,8 +135,8 @@ with gr.Blocks() as demo:
             prompt = gr.Textbox(label="Prompt:",
                                 max_lines=1)
             temperature = gr.Slider(0.0, 1.0, value=0, step=0.1, label="Temperature", info="Choose between 0.0 and 1.0")
-            lines_per_scene = gr.Number(label="Lines to summarize per run", value=50)
-            strides = gr.Number(label="Strides length", value=10)
+            lines_per_scene = gr.Number(label="Lines to summarize per run", value=100)
+            strides = gr.Number(label="Strides length", value=70)
             max_tokens = gr.Number(label="Maximum number of tokens (words) in the output", value=70)
             btn_summary = gr.Button("Summarize It")
             script_summary_output = gr.Textbox(label="Script Summary")
@@ -148,4 +146,7 @@ with gr.Blocks() as demo:
                       inputs=[out, temperature, prompt, lines_per_scene, strides, max_tokens],
                       outputs=script_summary_output)
 
-demo.launch()
+if 'GRADIO_USERNAME' in os.environ and 'GRADIO_PASSWORD' in os.environ:
+    demo.launch(server_name="0.0.0.0", share=False, auth=(os.environ['GRADIO_USERNAME'], os.environ['GRADIO_PASSWORD']))
+else:
+    demo.launch(server_name="0.0.0.0", share=False)
