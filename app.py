@@ -3,6 +3,10 @@ import ai21
 import boto3
 import os
 import time
+import logging
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 textract = boto3.client("textract")
 s3 = boto3.client("s3")
@@ -11,6 +15,7 @@ s3_input_prefix = "data/script-summarization/inputs"
 s3_output_prefix = "data/script-summarization/outputs"
 
 def extract_text(file_path):
+    logger.info("Extract Text")
     basename = os.path.basename(file_path)
     response = textract.start_document_text_detection(
         DocumentLocation={
@@ -25,6 +30,7 @@ def extract_text(file_path):
         },
     )
     job_id = response['JobId']
+    logger.info(f"JobId: {job_id}")
     get_job_response = textract.get_document_text_detection(JobId=job_id)
     status = get_job_response['JobStatus']
 
@@ -32,11 +38,14 @@ def extract_text(file_path):
         get_job_response = textract.get_document_text_detection(JobId=job_id)
         status = get_job_response['JobStatus']
 
+    logger.info(f"job {job_id} completed successfully")
+
     all_blocks = []
     blocks = get_job_response['Blocks']
+    logger.info(f"length of blocks: {len(blocks)}")
     all_blocks.extend(blocks)
     while 'NextToken' in get_job_response and len(get_job_response['NextToken']) > 0:
-        print(f"processing next_token: {get_job_response['NextToken']}")
+        logger.info(f"processing next_token: {get_job_response['NextToken']}")
         get_job_response = textract.get_document_text_detection(JobId=job_id, NextToken=get_job_response['NextToken'])
         blocks = get_job_response['Blocks']
         all_blocks.extend(blocks)
@@ -44,6 +53,7 @@ def extract_text(file_path):
     return all_blocks
 
 def upload_file(file_path):
+    logger.info("Uploading file")
     with open(file_path, "rb") as file_obj:
         basename = os.path.basename(file_path)
         s3.upload_fileobj(file_obj, s3_bucket, f"{s3_input_prefix}/{basename}")
@@ -83,6 +93,7 @@ def format_text(texts):
 
 
 def process_file(file_obj):
+    logger.info("Processing file")
     s3_file_path = upload_file(file_obj.name)
     blocks = extract_text(s3_file_path)
     texts = []
