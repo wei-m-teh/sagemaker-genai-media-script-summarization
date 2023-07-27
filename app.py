@@ -126,8 +126,9 @@ def generate_summary(prompt, numResults=1, temperature=0.1, max_tokens=70):
 
     return summaries
 
-def summarize_script(script, temperature, prompt, lines_per_scene, strides, max_tokens):
+def summarize_script(script, temperature, prompt, lines_per_scene, overlap, max_tokens):
     lines = script.split("\n")
+    strides = lines_per_scene - overlap
     summaries = []
     for starting_line in range(0, len(lines), int(strides)):
         lines_to_be_summarized = lines[starting_line: starting_line + int(lines_per_scene)]
@@ -143,24 +144,38 @@ def summarize_script(script, temperature, prompt, lines_per_scene, strides, max_
 with gr.Blocks() as demo:
     gr.Markdown("Upload a movie/show script in PDF or TXT file")
     with gr.Row():
-        with gr.Column(scale=1):
-            file_uploader = gr.File(file_types=["pdf", "txt"])
-            btn = gr.Button("Upload")
         with gr.Column(scale=2):
+            file_uploader = gr.File(file_types=["pdf", "txt"])
+            btn = gr.Button("Upload (S3) and extract")
             out = gr.Textbox(label="Extracted Script", interactive=True)
         with gr.Column(scale=2):
             prompt = gr.Textbox(label="Prompt:",
-                                max_lines=1)
-            temperature = gr.Slider(0.0, 1.0, value=0, step=0.1, label="Temperature", info="Choose between 0.0 and 1.0")
+                                max_lines=1,
+                                #placeholder="As a screenwriter, write me one sentence that summarizes the movie scene above",
+                                value="As a screenwriter, write me one sentence that summarizes the movie scene above",
+                                interactive=True)
+            temperature = gr.Slider(0.0, 1.0, value=0, step=0.1, label="Temperature", info="Choose between 0.0 and 1.0",)
             lines_per_scene = gr.Number(label="Lines to summarize per run", value=100)
-            strides = gr.Number(label="Strides length", value=70)
-            max_tokens = gr.Number(label="Maximum number of tokens (words) in the output", value=70)
-            btn_summary = gr.Button("Summarize It")
+            overlap = gr.Number(label="Lines to overlap from previous chunk", value=70)
+            max_tokens = gr.Number(label="Max-tokens", value=70)
+            btn_summary = gr.Button("Summarize script")
             script_summary_output = gr.Textbox(label="Script Summary")
-
+            gr.Markdown(
+        """
+        # Chunking strategy
+        ![](file/img/stride-explain-2.png)
+        """)
+    '''
+    with gr.Row():
+        gr.Markdown(
+    """
+    # Chunking strategy
+    ![](file/img/stride-explain.png)
+    """)
+    '''
     btn.click(fn=process_file, inputs=file_uploader, outputs=out)
     btn_summary.click(fn=summarize_script,
-                      inputs=[out, temperature, prompt, lines_per_scene, strides, max_tokens],
+                      inputs=[out, temperature, prompt, lines_per_scene, overlap, max_tokens],
                       outputs=script_summary_output)
 
 if 'GRADIO_USERNAME' in os.environ and 'GRADIO_PASSWORD' in os.environ:
