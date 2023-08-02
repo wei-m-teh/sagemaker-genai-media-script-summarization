@@ -1,9 +1,9 @@
 import gradio as gr
-import ai21
 import boto3
 import os
 import time
 import logging
+import json
 
 logging.basicConfig(
     level=logging.INFO,
@@ -14,9 +14,10 @@ logging.basicConfig(
 
 textract = boto3.client("textract")
 s3 = boto3.client("s3")
-s3_bucket = "sagemaker-us-east-1-602900100639"
-s3_input_prefix = "data/script-summarization/inputs"
-s3_output_prefix = "data/script-summarization/outputs"
+s3_bucket = os.environ.get("S3_BUCKET", "sagemaker-us-east-1-602900100639")
+s3_input_prefix = os.environ.get("S3_BUCKET_PREFIX", "data/script-summarization/inputs")
+s3_output_prefix = os.environ.get("S3_BUCKET_OUTPUT_PREFIX", "data/script-summarization/outputs")
+bedrock_model_id = os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-v2")
 
 def extract_text(file_path):
     logging.info("Extract Text")
@@ -96,73 +97,149 @@ def format_text(texts):
     formatted_lines.append(dialog_lines)
     return formatted_lines
 
-
+example_config_dict = {
+   "Toy-Story-1995.txt" : { "temperature" : 0, "chunk_size": 100, "overlap" : 30, "max_tokens" : 50},
+   "metal-heart.txt" : { "temperature" : 0, "chunk_size": 50, "overlap" : 10, "max_tokens" : 50},
+   "wings-of-light.txt" : { "temperature" : 0, "chunk_size": 50, "overlap" : 10, "max_tokens" : 50},
+   "the-journey-within.txt" : { "temperature" : 0, "chunk_size": 50, "overlap" : 10, "max_tokens" : 50}
+}
 def process_file(file_obj):
     logging.info("Processing file")
-    print("Processing file")
-    s3_file_path = upload_file(file_obj.name)
-    blocks = extract_text(s3_file_path)
-    texts = []
-    for block in blocks:
-        if block['BlockType'] == 'LINE':
-            text = block['Text']
-            texts.append(text)
-    formatted_texts = format_text(texts)
-    formatted_lines = ""
-    for formatted_text in formatted_texts:
-        formatted_lines += " ".join(formatted_text) + "\n"
-    return formatted_lines
+    temperature_comp = 0
+    chunk_size_comp = 100
+    overlap_comp = 30
+    max_tokens_comp = 50
+    is_example = False
+    if isinstance(file_obj, str):  # coming from the example
+        filename = f"examples/{file_obj}"
+        is_example=True
+        if file_obj.strip() in example_config_dict:
+            temperature_comp = example_config_dict[file_obj.strip()]['temperature']
+            chunk_size_comp = example_config_dict[file_obj.strip()]['chunk_size']
+            overlap_comp = example_config_dict[file_obj.strip()]['overlap']
+            max_tokens_comp = example_config_dict[file_obj.strip()]['max_tokens']
+    else:
+        filename = file_obj.name
+    extension = filename.split(".")[-1]
+    if extension.lower() == "txt" or extension.lower() == "TXT":
+        with open(filename, "r") as f:
+            data = f.readlines()
+            formatted_lines = "".join(data)
+            if is_example:
+                return formatted_lines, temperature_comp, chunk_size_comp, overlap_comp, max_tokens_comp
+            else:
+                return formatted_lines
+    if extension.lower() == "pdf" or extension.lower() == "PDF":  # Examples are always in txt, not in PDF
+        s3_file_path = upload_file(file_obj.name)
+        blocks = extract_text(s3_file_path)
+        texts = []
+        for block in blocks:
+            if block['BlockType'] == 'LINE':
+                text = block['Text']
+                texts.append(text)
+        formatted_texts = format_text(texts)
+        formatted_lines = ""
+        for formatted_text in formatted_texts:
+            formatted_lines += " ".join(formatted_text) + "\n"
+        return formatted_lines
+    else:
+        raise Exception("Unsupported file type")
 
+def get_bedrock_client():
+    if "ASSUMABLE_ROLE_ARN" in os.environ:
+        session = boto3.Session()
+        sts = session.client("sts")
+        response = sts.assume_role(
+            RoleArn=os.environ.get("ASSUMABLE_ROLE_ARN", None),
+            RoleSessionName="bedrock"
+        )
+        new_session = boto3.Session(aws_access_key_id=response['Credentials']['AccessKeyId'],
+                              aws_secret_access_key=response['Credentials']['SecretAccessKey'],
+                              aws_session_token=response['Credentials']['SessionToken'])
 
-def generate_summary(prompt, numResults=1, temperature=0.1, max_tokens=70):
-    response = ai21.Completion.execute(sm_endpoint="j2-jumbo-instruct",
-                                       prompt=prompt,
-                                       maxTokens=max_tokens,
-                                       temperature=temperature,
-                                       numResults=numResults)
+        bedrock = new_session.client('bedrock' , 'us-east-1')
+    else:
+        bedrock = boto3.client("bedrock", "us-east-1")
+    return bedrock
+
+boto3_bedrock = get_bedrock_client()
+def generate_summary(prompt, temperature=0.1, max_tokens=70):
+
+    body = json.dumps({
+        "prompt": prompt, "max_tokens_to_sample": max_tokens, "temperature": temperature,
+        "top_k": 250, "top_p": 1.0, "stop_sequences": []}
+    )
+    content_type = "application/json"
+    response = boto3_bedrock.invoke_model(body=body, modelId=bedrock_model_id, accept="*/*", contentType=content_type)
+    response_body = json.loads(response.get('body').read())
     summaries = []
-    for completion in response['completions']:
-        summaries.append(completion['data']['text'][1:])
-
+    summaries.append(response_body['completion'])
     return summaries
 
-def summarize_script(script, temperature, prompt, lines_per_scene, overlap, max_tokens):
+def summarize_script(script, temperature, prompt, chunk_size, overlap, max_tokens):
     lines = script.split("\n")
-    strides = lines_per_scene - overlap
+    strides = chunk_size - overlap
     summaries = []
     for starting_line in range(0, len(lines), int(strides)):
-        lines_to_be_summarized = lines[starting_line: starting_line + int(lines_per_scene)]
-        prompt_ = " ".join(lines_to_be_summarized) + "\n\n" + "As a screenwriter, write me one sentence that summarizes the movie scene above"
-        summary = generate_summary(prompt_, 1, 0)
+        lines_to_be_summarized = lines[starting_line: starting_line + int(chunk_size)]
+        prompt_ = "\n\nHuman: Given the movie scene below wrapped in <scene></scene> tags:" + "\n" + "\n<scene>\n" + " ".join(lines_to_be_summarized) + "\n</scene>\n" + \
+                  "As a screenwriter, summarizes the movie scene in one sentence." + "\n\nAssistant:"
+        summary = generate_summary(prompt_, 0)
         summaries.extend(summary)
 
     lines = summaries
-    summarized_prompt = " ".join(lines) + "\n\n" + prompt
-    summary = generate_summary(summarized_prompt, 1, temperature)
+    summarized_prompt = "\n\nHuman: Given the movie scene below wrapped in <scene></scene> tags:\n" + \
+                        "\n<scene>\n" + " ".join(lines) + "\n</scene>\n" + prompt + "\nOnly show the summary text.\n\nAssistant:"
+    summary = generate_summary(summarized_prompt, temperature)
     return summary[0]
 
-with gr.Blocks() as demo:
-    gr.Markdown("Upload a movie/show script in PDF or TXT file")
+default_temperature = gr.Slider(0.0, 1.0, value=0, step=0.1, label="Temperature", info="Choose between 0.0 and 1.0 to control the randomness in the output. "
+                                                                                       "A high temperature produces more creative results; "
+                                                                                       "A low temperature produces more conservative results.")
+default_chunk_size = gr.Number(label="Lines to summarize per chunk", value=100, info='Number of lines to include in generating a summary')
+default_overlap = gr.Number(label="Lines to overlap from previous chunk", value=30, info="Number of lines from previous chunk to include in generating a summary")
+default_max_tokens = gr.Number(label="Maximum Generated tokens (words)", value=70)
+default_out = gr.Textbox(label="Extracted Screenplay (Editable)", interactive=True)
+
+with gr.Blocks(theme=gr.themes.Default(text_size=gr.themes.sizes.text_lg,
+                                       font=[gr.themes.GoogleFont("Source Sans Pro"), "Arial", "sans-serif"])) as demo:
+    with gr.Row():
+        with gr.Column(scale=1):
+            gr.Markdown('![](file/img/AWS-MnE.jpeg)')
+        with gr.Column(scale=2):
+            gr.Markdown('<h1 class="text10xl font-bold font-secondary text-gray-800 dark:text-gray-100 uppercase">'
+                    '<p style="text-align: left; vertical-align: bottom;"><font size="+3">MEDIA SCREENPLAY SUMMARY ASSISTANT</font></p></h1>')
+            gr.Markdown('<p style="text-align: left; vertical-align: bottom;padding: 2px 50px;font-family: verdana; color:grey"><font size="+1"><br>Create summary, synopsis or EPG in seconds</br></font></p>')
+
     with gr.Row():
         with gr.Column(scale=2):
-            file_uploader = gr.File(file_types=["pdf", "txt"])
-            btn = gr.Button("Upload (S3) and extract")
-            out = gr.Textbox(label="Extracted Script", interactive=True)
+            with gr.Row():
+                file_uploader = gr.File(file_types=["pdf", "txt"], label="Upload a pdf or text, or try some examples",
+                                        show_label=True)
+                gr.Examples(
+                    label="Example Screenplays",
+                    examples=["Toy-Story-1995.txt", "metal-heart.txt", "wings-of-light.txt", "the-journey-within.txt"],
+                    inputs=[default_out],
+                    outputs=[default_out, default_temperature, default_chunk_size, default_overlap, default_max_tokens],
+                    fn=process_file,
+                    cache_examples=False,
+                    run_on_click=True
+                )
+            out = default_out.render()
         with gr.Column(scale=2):
             prompt = gr.Textbox(label="Prompt:",
                                 max_lines=1,
-                                #placeholder="As a screenwriter, write me one sentence that summarizes the movie scene above",
-                                value="As a screenwriter, write me one sentence that summarizes the movie scene above",
+                                value="As a screenwriter, write me one sentence that summarizes the given movie script.",
                                 interactive=True)
-            temperature = gr.Slider(0.0, 1.0, value=0, step=0.1, label="Temperature", info="Choose between 0.0 and 1.0",)
-            lines_per_scene = gr.Number(label="Lines to summarize per run", value=100)
-            overlap = gr.Number(label="Lines to overlap from previous chunk", value=70)
-            max_tokens = gr.Number(label="Max-tokens", value=70)
-            btn_summary = gr.Button("Summarize script")
-            script_summary_output = gr.Textbox(label="Script Summary")
+            temperature = default_temperature.render()
+            chunk_size = default_chunk_size.render()
+            overlap = default_overlap.render()
+            max_tokens = default_max_tokens.render()
+            btn_summary = gr.Button("Summarize it!")
+            script_summary_output = gr.Textbox(label="Screenplay Summary")
             gr.Markdown(
         """
-        # Chunking strategy
+        # Chunking Strategy Illustrated
         ![](file/img/stride-explain-2.png)
         """)
     '''
@@ -173,12 +250,14 @@ with gr.Blocks() as demo:
     ![](file/img/stride-explain.png)
     """)
     '''
-    btn.click(fn=process_file, inputs=file_uploader, outputs=out)
     btn_summary.click(fn=summarize_script,
-                      inputs=[out, temperature, prompt, lines_per_scene, overlap, max_tokens],
+                      inputs=[out, temperature, prompt, chunk_size, overlap, max_tokens],
                       outputs=script_summary_output)
+    file_uploader.upload(fn=process_file, inputs=file_uploader, outputs=[out])
 
 if 'GRADIO_USERNAME' in os.environ and 'GRADIO_PASSWORD' in os.environ:
-    demo.queue().launch(server_name="0.0.0.0", share=False, auth=(os.environ['GRADIO_USERNAME'], os.environ['GRADIO_PASSWORD']))
+    demo.queue().launch(server_name="0.0.0.0", share=False,
+                        auth=(os.environ['GRADIO_USERNAME'],
+                              os.environ['GRADIO_PASSWORD']))
 else:
     demo.queue().launch(server_name="0.0.0.0", share=False)
