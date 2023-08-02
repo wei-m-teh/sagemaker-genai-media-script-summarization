@@ -98,7 +98,6 @@ def format_text(texts):
     return formatted_lines
 
 example_config_dict = {
-   "Toy-Story-1995.txt" : { "temperature" : 0, "chunk_size": 100, "overlap" : 30, "max_tokens" : 50},
    "metal-heart.txt" : { "temperature" : 0, "chunk_size": 50, "overlap" : 10, "max_tokens" : 50},
    "wings-of-light.txt" : { "temperature" : 0, "chunk_size": 50, "overlap" : 10, "max_tokens" : 50},
    "the-journey-within.txt" : { "temperature" : 0, "chunk_size": 50, "overlap" : 10, "max_tokens" : 50}
