@@ -217,7 +217,7 @@ with gr.Blocks(theme=gr.themes.Default(text_size=gr.themes.sizes.text_lg,
                                         show_label=True)
                 gr.Examples(
                     label="Example Screenplays",
-                    examples=["Toy-Story-1995.txt", "metal-heart.txt", "wings-of-light.txt", "the-journey-within.txt"],
+                    examples=["metal-heart.txt", "wings-of-light.txt", "the-journey-within.txt"],
                     inputs=[default_out],
                     outputs=[default_out, default_temperature, default_chunk_size, default_overlap, default_max_tokens],
                     fn=process_file,
@@ -238,7 +238,7 @@ with gr.Blocks(theme=gr.themes.Default(text_size=gr.themes.sizes.text_lg,
             script_summary_output = gr.Textbox(label="Screenplay Summary")
             gr.Markdown(
         """
-        # Chunking Strategy Illustrated
+        # Chunking Strategy Illustration
         ![](file/img/stride-explain-2.png)
         """)
     '''
