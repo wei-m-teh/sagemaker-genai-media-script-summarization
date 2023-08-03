@@ -4,6 +4,7 @@ import os
 import time
 import logging
 import json
+import botocore
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,7 +19,7 @@ s3_bucket = os.environ.get("S3_BUCKET", "sagemaker-us-east-1-602900100639")
 s3_input_prefix = os.environ.get("S3_BUCKET_PREFIX", "data/script-summarization/inputs")
 s3_output_prefix = os.environ.get("S3_BUCKET_OUTPUT_PREFIX", "data/script-summarization/outputs")
 bedrock_model_id = os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-v2")
-
+BEDROCK_SERVICE_MAX_RETRIES = 10
 def extract_text(file_path):
     logging.info("Extract Text")
     basename = os.path.basename(file_path)
@@ -163,13 +164,36 @@ def get_bedrock_client():
 
 boto3_bedrock = get_bedrock_client()
 def generate_summary(prompt, temperature=0.1, max_tokens=70):
+    global boto3_bedrock
 
     body = json.dumps({
         "prompt": prompt, "max_tokens_to_sample": max_tokens, "temperature": temperature,
         "top_k": 250, "top_p": 1.0, "stop_sequences": []}
     )
     content_type = "application/json"
-    response = boto3_bedrock.invoke_model(body=body, modelId=bedrock_model_id, accept="*/*", contentType=content_type)
+    try:
+        response = boto3_bedrock.invoke_model(body=body, modelId=bedrock_model_id, accept="*/*", contentType=content_type)
+    except botocore.exceptions.ClientError as err:
+        if err.response['Error']['Code'] == "ExpiredToken":
+            print("Expired token. Generate a new token and retry")
+            boto3_bedrock = get_bedrock_client()
+            response = boto3_bedrock.invoke_model(body=body, modelId=bedrock_model_id, accept="*/*",
+                                                  contentType=content_type)
+        elif err.response['Error']['Code'] == 'ThrottlingException':
+            print("Bedrock service is being throttled")
+            call_nbr = 0
+            while call_nbr < BEDROCK_SERVICE_MAX_RETRIES:
+                print("Bedrock service is being throttled, retrying..")
+                time.sleep(1)
+                try:
+                    response = boto3_bedrock.invoke_model(body=body, modelId=bedrock_model_id, accept="*/*",
+                                               contentType=content_type)
+                    break
+                except:
+                    call_nbr += 1
+            print("Bedrock service is being throttled, maximum retries reached..throws exception")
+            raise err
+
     response_body = json.loads(response.get('body').read())
     summaries = []
     summaries.append(response_body['completion'])
