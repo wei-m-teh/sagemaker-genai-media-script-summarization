@@ -143,7 +143,7 @@ def process_file(file_obj):
             formatted_lines += " ".join(formatted_text) + "\n"
         return formatted_lines
     else:
-        raise Exception("Unsupported file type")
+        raise gr.Error("Unsupported file type. Only pdf or txt files are supported")
 
 def get_bedrock_client():
     if "ASSUMABLE_ROLE_ARN" in os.environ:
