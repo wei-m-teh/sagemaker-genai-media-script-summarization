@@ -207,7 +207,7 @@ with gr.Blocks(theme=gr.themes.Default(text_size=gr.themes.sizes.text_lg,
             gr.Markdown('![](file/img/AWS-MnE.jpeg)')
         with gr.Column(scale=2):
             gr.Markdown('<h1 class="text10xl font-bold font-secondary text-gray-800 dark:text-gray-100 uppercase">'
-                    '<p style="text-align: left; vertical-align: bottom;"><font size="+3">MEDIA SCREENPLAY SUMMARY ASSISTANT</font></p></h1>')
+                    '<p style="text-align: left; vertical-align: bottom;"><font size="+3">MEDIA SCREENPLAY AI ASSISTANT</font></p></h1>')
             gr.Markdown('<p style="text-align: left; vertical-align: bottom;padding: 2px 50px;font-family: verdana; color:grey"><font size="+1"><br>Create summary, synopsis or EPG in seconds</br></font></p>')
 
     with gr.Row():
@@ -234,7 +234,7 @@ with gr.Blocks(theme=gr.themes.Default(text_size=gr.themes.sizes.text_lg,
             chunk_size = default_chunk_size.render()
             overlap = default_overlap.render()
             max_tokens = default_max_tokens.render()
-            btn_summary = gr.Button("Summarize it!")
+            btn_summary = gr.Button("Summarize it!", variant="primary")
             script_summary_output = gr.Textbox(label="Screenplay Summary")
             gr.Markdown(
         """
