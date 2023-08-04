@@ -188,11 +188,14 @@ def generate_summary(prompt, temperature=0.1, max_tokens=70):
                 try:
                     response = boto3_bedrock.invoke_model(body=body, modelId=bedrock_model_id, accept="*/*",
                                                contentType=content_type)
-                    break
+                    response_body = json.loads(response.get('body').read())
+                    summaries = []
+                    summaries.append(response_body['completion'])
+                    return summaries
                 except:
                     call_nbr += 1
             print("Bedrock service is being throttled, maximum retries reached..throws exception")
-            raise err
+            raise gr.Error("Service is at capacity right now, please try again later")
 
     response_body = json.loads(response.get('body').read())
     summaries = []
