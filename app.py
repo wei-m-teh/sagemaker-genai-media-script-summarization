@@ -179,6 +179,10 @@ def generate_summary(prompt, temperature=0.1, max_tokens=70):
             boto3_bedrock = get_bedrock_client()
             response = boto3_bedrock.invoke_model(body=body, modelId=bedrock_model_id, accept="*/*",
                                                   contentType=content_type)
+            response_body = json.loads(response.get('body').read())
+            summaries = []
+            summaries.append(response_body['completion'])
+            return summaries
         elif err.response['Error']['Code'] == 'ThrottlingException':
             print("Bedrock service is being throttled")
             call_nbr = 0
