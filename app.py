@@ -173,6 +173,10 @@ def generate_summary(prompt, temperature=0.1, max_tokens=70):
     content_type = "application/json"
     try:
         response = boto3_bedrock.invoke_model(body=body, modelId=bedrock_model_id, accept="*/*", contentType=content_type)
+        response_body = json.loads(response.get('body').read())
+        summaries = []
+        summaries.append(response_body['completion'])
+        return summaries
     except botocore.exceptions.ClientError as err:
         if err.response['Error']['Code'] == "ExpiredToken":
             print("Expired token. Generate a new token and retry")
@@ -200,11 +204,6 @@ def generate_summary(prompt, temperature=0.1, max_tokens=70):
                     call_nbr += 1
             print("Bedrock service is being throttled, maximum retries reached..throws exception")
             raise gr.Error("Service is at capacity right now, please try again later")
-
-    response_body = json.loads(response.get('body').read())
-    summaries = []
-    summaries.append(response_body['completion'])
-    return summaries
 
 def summarize_script(script, temperature, prompt, chunk_size, overlap, max_tokens):
     lines = script.split("\n")
