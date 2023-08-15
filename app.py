@@ -101,7 +101,8 @@ def format_text(texts):
 example_config_dict = {
    "metal-heart.txt" : { "temperature" : 0, "chunk_size": 50, "overlap" : 10, "max_tokens" : 50},
    "wings-of-light.txt" : { "temperature" : 0, "chunk_size": 50, "overlap" : 10, "max_tokens" : 50},
-   "the-journey-within.txt" : { "temperature" : 0, "chunk_size": 50, "overlap" : 10, "max_tokens" : 50}
+   "the-journey-within.txt" : { "temperature" : 0, "chunk_size": 50, "overlap" : 10, "max_tokens" : 50},
+   "paws-and-paints.txt" : { "temperature" : 0.5, "chunk_size": 50, "overlap" : 10, "max_tokens" : 50}
 }
 def process_file(file_obj):
     logging.info("Processing file")
@@ -178,7 +179,7 @@ def generate_summary(prompt, temperature=0.1, max_tokens=70):
         summaries.append(response_body['completion'])
         return summaries
     except botocore.exceptions.ClientError as err:
-        if err.response['Error']['Code'] == "ExpiredToken":
+        if err.response['Error']['Code'] == "ExpiredTokenException":
             print("Expired token. Generate a new token and retry")
             boto3_bedrock = get_bedrock_client()
             response = boto3_bedrock.invoke_model(body=body, modelId=bedrock_model_id, accept="*/*",
@@ -204,6 +205,10 @@ def generate_summary(prompt, temperature=0.1, max_tokens=70):
                     call_nbr += 1
             print("Bedrock service is being throttled, maximum retries reached..throws exception")
             raise gr.Error("Service is at capacity right now, please try again later")
+        else:
+            print("Unknown error encountered")
+            raise err
+
 
 def summarize_script(script, temperature, prompt, chunk_size, overlap, max_tokens):
     lines = script.split("\n")
@@ -247,7 +252,7 @@ with gr.Blocks(theme=gr.themes.Default(text_size=gr.themes.sizes.text_lg,
                                         show_label=True)
                 gr.Examples(
                     label="Example Screenplays",
-                    examples=["metal-heart.txt", "wings-of-light.txt", "the-journey-within.txt"],
+                    examples=["metal-heart.txt", "wings-of-light.txt", "the-journey-within.txt", "paws-and-paints.txt"],
                     inputs=[default_out],
                     outputs=[default_out, default_temperature, default_chunk_size, default_overlap, default_max_tokens],
                     fn=process_file,
