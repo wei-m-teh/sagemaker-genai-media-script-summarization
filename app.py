@@ -21,6 +21,8 @@ s3_output_prefix = os.environ.get("S3_BUCKET_OUTPUT_PREFIX", "data/script-summar
 bedrock_model_id = os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-3-haiku-20240307-v1:0")
 enable_upload = os.environ.get("ENABLE_UPLOAD", "False")
 region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+cache_dir = "/tmp"
+out = None # set to nothing for now and will be filled when user selects an example.
 
 BEDROCK_SERVICE_MAX_RETRIES = 10
 def extract_text(file_path):
@@ -102,9 +104,9 @@ def format_text(texts):
     return formatted_lines
 
 example_config_dict = {
-   "ai-initiatives-dod.txt" : { "temperature" : 0.5, "chunk_size": 500, "overlap" : 100, "max_tokens" : 1024},
-   "interoperability-of-ai-copyright-law.txt" : { "temperature" : 0.5, "chunk_size": 500, "overlap" : 100, "max_tokens" : 1024},
-   "rules-for-ai.txt" : { "temperature" : 0.5, "chunk_size": 500, "overlap" : 100, "max_tokens" : 1024},
+   "house-hearing-ai-initiatives-dod.txt" : { "temperature" : 0.5, "chunk_size": 500, "overlap" : 100, "max_tokens" : 1024},
+   "house-hearing-interoperability-of-ai-copyright-law.txt" : { "temperature" : 0.5, "chunk_size": 500, "overlap" : 100, "max_tokens" : 1024},
+   "house-hearing-rules-for-ai.txt" : { "temperature" : 0.5, "chunk_size": 500, "overlap" : 100, "max_tokens" : 1024},
 }
 def process_file(file_obj):
     logging.info("Processing file")
@@ -129,7 +131,7 @@ def process_file(file_obj):
             data = f.readlines()
             formatted_lines = "".join(data)
             if is_example:
-                return formatted_lines, temperature_comp, chunk_size_comp, overlap_comp, max_tokens_comp
+                return formatted_lines, temperature_comp, chunk_size_comp, overlap_comp, max_tokens_comp, os.path.basename(filename)
             else:
                 return formatted_lines
     if extension.lower() == "pdf" or extension.lower() == "PDF":  # Examples are always in txt, not in PDF
@@ -168,11 +170,6 @@ def get_bedrock_client():
 boto3_bedrock = get_bedrock_client()
 def generate_summary(prompt, temperature=0.1, max_tokens=70):
     global boto3_bedrock
-
-    # body = json.dumps({
-    #     "prompt": prompt, "max_tokens_to_sample": max_tokens, "temperature": temperature,
-    #     "top_k": 250, "top_p": 1.0, "stop_sequences": []}
-    # )
 
     body = json.dumps({"messages":[{"role":"user","content":[{"type": "text",
                                                               "text": prompt}]}],
@@ -221,8 +218,21 @@ def generate_summary(prompt, temperature=0.1, max_tokens=70):
             print("Unknown error encountered")
             raise err
 
+def summarize_script(script, temperature, prompt, chunk_size, overlap, max_tokens, filename=None):
+    cache_filepath = f"{cache_dir}/{filename}"
+    if os.path.exists(cache_filepath):
+        with open(cache_filepath, "r") as f:
+            cache_data_lines = f.readlines()
+        for line in cache_data_lines:
+            cache_data = json.loads(line)
+            if temperature == cache_data['temperature'] and \
+                    chunk_size == cache_data['chunk_size'] and \
+                    overlap == cache_data['overlap'] and \
+                    max_tokens == cache_data['max_tokens'] and \
+                    prompt.strip() == cache_data['prompt'].strip():
+                # found the summary, then just return it.
+                return cache_data['summary']
 
-def summarize_script(script, temperature, prompt, chunk_size, overlap, max_tokens):
     lines = script.split("\n")
     strides = chunk_size - overlap
     summaries = []
@@ -236,8 +246,19 @@ def summarize_script(script, temperature, prompt, chunk_size, overlap, max_token
     lines = summaries
     summarized_prompt = "Given the documents wrapped in <doc></doc> tags:\n" + \
                         "\n<doc>\n" + " ".join(lines) + "\n</doc>\n" + prompt + "\nOnly show the summarized text."
-    summary = generate_summary(summarized_prompt, temperature, max_tokens)
-    return summary[0]
+    summaries = generate_summary(summarized_prompt, temperature, max_tokens)
+    summary = summaries[0]
+    with open(cache_filepath, "a") as f:
+        summary_data = {}
+        summary_data['temperature'] = temperature
+        summary_data['chunk_size'] = chunk_size
+        summary_data['overlap'] = overlap
+        summary_data['max_tokens'] = max_tokens
+        summary_data['summary'] = summary
+        summary_data['prompt'] = prompt.strip()
+        f.write(f"{json.dumps(summary_data)}\n")
+
+    return summary
 
 default_temperature = gr.Slider(0.0, 1.0, value=0, step=0.1, label="Temperature", info="Choose between 0.0 and 1.0 to control the randomness in the output. "
                                                                                        "A high temperature produces more creative results; "
@@ -246,6 +267,7 @@ default_chunk_size = gr.Number(label="Lines to summarize per chunk", value=100, 
 default_overlap = gr.Number(label="Lines to overlap from previous chunk", value=30, info="Number of lines from previous chunk to include in generating a summary")
 default_max_tokens = gr.Number(label="Maximum Generated tokens (words)", value=70)
 default_out = gr.Textbox(label="Extracted Document (Editable)", interactive=True)
+default_filename = gr.Textbox(visible=False)
 
 if enable_upload.lower() == "true":
     upload_label = "Try the examples on the right, or upload your own"
@@ -262,7 +284,7 @@ with gr.Blocks(theme=gr.themes.Default(text_size=gr.themes.sizes.text_lg,
         with gr.Column(scale=2):
             gr.Markdown('<h1 class="text10xl font-bold font-secondary text-gray-800 dark:text-gray-100 uppercase">'
                     '<p style="text-align: left; vertical-align: bottom;"><font size="+3">LARGE DOCUMENT SUMMARY ASSISTANT</font></p></h1>')
-            gr.Markdown('<p style="text-align: left; vertical-align: bottom;padding: 2px 50px;font-family: verdana; color:grey"><font size="+1"><br>Create summary, synopsis or EPG in seconds</br></font></p>')
+            gr.Markdown('<p style="text-align: left; vertical-align: bottom;padding: 2px 50px;font-family: verdana; color:grey"><font size="+1"><br>Create summary from Large Documents in seconds</br></font></p>')
 
     with gr.Row():
         with gr.Column(scale=2):
@@ -273,12 +295,13 @@ with gr.Blocks(theme=gr.themes.Default(text_size=gr.themes.sizes.text_lg,
                     label="Example Documents",
                     examples=list(example_config_dict.keys()),
                     inputs=[default_out],
-                    outputs=[default_out, default_temperature, default_chunk_size, default_overlap, default_max_tokens],
+                    outputs=[default_out, default_temperature, default_chunk_size, default_overlap, default_max_tokens, default_filename],
                     fn=process_file,
                     cache_examples=False,
                     run_on_click=True
                 )
             out = default_out.render()
+            default_filename.render()
         with gr.Column(scale=2):
             prompt = gr.Textbox(label="Prompt:",
                                 max_lines=1,
@@ -292,7 +315,7 @@ with gr.Blocks(theme=gr.themes.Default(text_size=gr.themes.sizes.text_lg,
             script_summary_output = gr.Textbox(label="Document Summary")
             
     btn_summary.click(fn=summarize_script,
-                      inputs=[out, temperature, prompt, chunk_size, overlap, max_tokens],
+                      inputs=[out, temperature, prompt, chunk_size, overlap, max_tokens, default_filename],
                       outputs=script_summary_output)
     file_uploader.upload(fn=process_file, inputs=file_uploader, outputs=[out])
 
