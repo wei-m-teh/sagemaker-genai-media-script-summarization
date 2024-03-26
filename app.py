@@ -18,7 +18,10 @@ s3 = boto3.client("s3")
 s3_bucket = os.environ.get("S3_BUCKET", "sagemaker-us-east-1-602900100639")
 s3_input_prefix = os.environ.get("S3_BUCKET_PREFIX", "data/script-summarization/inputs")
 s3_output_prefix = os.environ.get("S3_BUCKET_OUTPUT_PREFIX", "data/script-summarization/outputs")
-bedrock_model_id = os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-v2")
+bedrock_model_id = os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-3-haiku-20240307-v1:0")
+enable_upload = os.environ.get("ENABLE_UPLOAD", "False")
+region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+
 BEDROCK_SERVICE_MAX_RETRIES = 10
 def extract_text(file_path):
     logging.info("Extract Text")
@@ -99,10 +102,9 @@ def format_text(texts):
     return formatted_lines
 
 example_config_dict = {
-   "metal-heart.txt" : { "temperature" : 0, "chunk_size": 50, "overlap" : 10, "max_tokens" : 50},
-   "wings-of-light.txt" : { "temperature" : 0, "chunk_size": 50, "overlap" : 10, "max_tokens" : 50},
-   "the-journey-within.txt" : { "temperature" : 0, "chunk_size": 50, "overlap" : 10, "max_tokens" : 50},
-   "paws-and-paints.txt" : { "temperature" : 0.5, "chunk_size": 50, "overlap" : 10, "max_tokens" : 50}
+   "ai-initiatives-dod.txt" : { "temperature" : 0.5, "chunk_size": 500, "overlap" : 100, "max_tokens" : 1024},
+   "interoperability-of-ai-copyright-law.txt" : { "temperature" : 0.5, "chunk_size": 500, "overlap" : 100, "max_tokens" : 1024},
+   "rules-for-ai.txt" : { "temperature" : 0.5, "chunk_size": 500, "overlap" : 100, "max_tokens" : 1024},
 }
 def process_file(file_obj):
     logging.info("Processing file")
@@ -158,25 +160,35 @@ def get_bedrock_client():
                               aws_secret_access_key=response['Credentials']['SecretAccessKey'],
                               aws_session_token=response['Credentials']['SessionToken'])
 
-        bedrock = new_session.client('bedrock' , 'us-east-1')
+        bedrock = new_session.client('bedrock-runtime' , region)
     else:
-        bedrock = boto3.client("bedrock", "us-east-1")
+        bedrock = boto3.client("bedrock-runtime", region)
     return bedrock
 
 boto3_bedrock = get_bedrock_client()
 def generate_summary(prompt, temperature=0.1, max_tokens=70):
     global boto3_bedrock
 
-    body = json.dumps({
-        "prompt": prompt, "max_tokens_to_sample": max_tokens, "temperature": temperature,
-        "top_k": 250, "top_p": 1.0, "stop_sequences": []}
-    )
+    # body = json.dumps({
+    #     "prompt": prompt, "max_tokens_to_sample": max_tokens, "temperature": temperature,
+    #     "top_k": 250, "top_p": 1.0, "stop_sequences": []}
+    # )
+
+    body = json.dumps({"messages":[{"role":"user","content":[{"type": "text",
+                                                              "text": prompt}]}],
+                                                              "anthropic_version":"bedrock-2023-05-31",
+                                                              "max_tokens":max_tokens,
+                                                              "temperature":temperature,
+                                                              "top_k":250,
+                                                              "top_p":1.0,
+                                                              "stop_sequences":["\n\nHuman:"]})
+
     content_type = "application/json"
     try:
         response = boto3_bedrock.invoke_model(body=body, modelId=bedrock_model_id, accept="*/*", contentType=content_type)
         response_body = json.loads(response.get('body').read())
         summaries = []
-        summaries.append(response_body['completion'])
+        summaries.append(response_body['content'][0]['text'])
         return summaries
     except botocore.exceptions.ClientError as err:
         if err.response['Error']['Code'] == "ExpiredTokenException":
@@ -186,7 +198,7 @@ def generate_summary(prompt, temperature=0.1, max_tokens=70):
                                                   contentType=content_type)
             response_body = json.loads(response.get('body').read())
             summaries = []
-            summaries.append(response_body['completion'])
+            summaries.append(response_body['content'][0]['text'])
             return summaries
         elif err.response['Error']['Code'] == 'ThrottlingException':
             print("Bedrock service is being throttled")
@@ -216,15 +228,15 @@ def summarize_script(script, temperature, prompt, chunk_size, overlap, max_token
     summaries = []
     for starting_line in range(0, len(lines), int(strides)):
         lines_to_be_summarized = lines[starting_line: starting_line + int(chunk_size)]
-        prompt_ = "\n\nHuman: Given the movie scene below wrapped in <scene></scene> tags:" + "\n" + "\n<scene>\n" + " ".join(lines_to_be_summarized) + "\n</scene>\n" + \
-                  "As a screenwriter, summarizes the movie scene in one sentence." + "\n\nAssistant:"
-        summary = generate_summary(prompt_, 0)
+        prompt_ = "Given a document wrapped in <doc></doc> tags in the following:" + "\n" + "\n<doc>\n" + " ".join(lines_to_be_summarized) + "\n</doc>\n" + \
+                  "As a document editor, give a summary for the document. Only show the summarized text."
+        summary = generate_summary(prompt_, temperature)
         summaries.extend(summary)
 
     lines = summaries
-    summarized_prompt = "\n\nHuman: Given the movie scene below wrapped in <scene></scene> tags:\n" + \
-                        "\n<scene>\n" + " ".join(lines) + "\n</scene>\n" + prompt + "\nOnly show the summary text.\n\nAssistant:"
-    summary = generate_summary(summarized_prompt, temperature)
+    summarized_prompt = "Given the documents wrapped in <doc></doc> tags:\n" + \
+                        "\n<doc>\n" + " ".join(lines) + "\n</doc>\n" + prompt + "\nOnly show the summarized text."
+    summary = generate_summary(summarized_prompt, temperature, max_tokens)
     return summary[0]
 
 default_temperature = gr.Slider(0.0, 1.0, value=0, step=0.1, label="Temperature", info="Choose between 0.0 and 1.0 to control the randomness in the output. "
@@ -233,7 +245,14 @@ default_temperature = gr.Slider(0.0, 1.0, value=0, step=0.1, label="Temperature"
 default_chunk_size = gr.Number(label="Lines to summarize per chunk", value=100, info='Number of lines to include in generating a summary')
 default_overlap = gr.Number(label="Lines to overlap from previous chunk", value=30, info="Number of lines from previous chunk to include in generating a summary")
 default_max_tokens = gr.Number(label="Maximum Generated tokens (words)", value=70)
-default_out = gr.Textbox(label="Extracted Screenplay (Editable)", interactive=True)
+default_out = gr.Textbox(label="Extracted Document (Editable)", interactive=True)
+
+if enable_upload.lower() == "true":
+    upload_label = "Try the examples on the right, or upload your own"
+    file_interactive_model = True
+else:
+    upload_label = "Try with the examples on the right"
+    file_interactive_model = False
 
 with gr.Blocks(theme=gr.themes.Default(text_size=gr.themes.sizes.text_lg,
                                        font=[gr.themes.GoogleFont("Source Sans Pro"), "Arial", "sans-serif"])) as demo:
@@ -242,17 +261,17 @@ with gr.Blocks(theme=gr.themes.Default(text_size=gr.themes.sizes.text_lg,
             gr.Markdown('![](file/img/AWS-MnE.jpeg)')
         with gr.Column(scale=2):
             gr.Markdown('<h1 class="text10xl font-bold font-secondary text-gray-800 dark:text-gray-100 uppercase">'
-                    '<p style="text-align: left; vertical-align: bottom;"><font size="+3">MEDIA SCREENPLAY AI ASSISTANT</font></p></h1>')
+                    '<p style="text-align: left; vertical-align: bottom;"><font size="+3">LARGE DOCUMENT SUMMARY ASSISTANT</font></p></h1>')
             gr.Markdown('<p style="text-align: left; vertical-align: bottom;padding: 2px 50px;font-family: verdana; color:grey"><font size="+1"><br>Create summary, synopsis or EPG in seconds</br></font></p>')
 
     with gr.Row():
         with gr.Column(scale=2):
             with gr.Row():
-                file_uploader = gr.File(file_types=["pdf", "txt"], label="Upload a pdf or text, or try some examples",
-                                        show_label=True)
+                file_uploader = gr.File(file_types=["pdf", "txt"], label=upload_label,
+                                        show_label=True, interactive=file_interactive_model)
                 gr.Examples(
-                    label="Example Screenplays",
-                    examples=["metal-heart.txt", "wings-of-light.txt", "the-journey-within.txt", "paws-and-paints.txt"],
+                    label="Example Documents",
+                    examples=list(example_config_dict.keys()),
                     inputs=[default_out],
                     outputs=[default_out, default_temperature, default_chunk_size, default_overlap, default_max_tokens],
                     fn=process_file,
@@ -263,27 +282,15 @@ with gr.Blocks(theme=gr.themes.Default(text_size=gr.themes.sizes.text_lg,
         with gr.Column(scale=2):
             prompt = gr.Textbox(label="Prompt:",
                                 max_lines=1,
-                                value="As a screenwriter, write me one sentence that summarizes the given movie script.",
+                                value="As a document editor, summarize the given document.",
                                 interactive=True)
             temperature = default_temperature.render()
             chunk_size = default_chunk_size.render()
             overlap = default_overlap.render()
             max_tokens = default_max_tokens.render()
             btn_summary = gr.Button("Summarize it!", variant="primary")
-            script_summary_output = gr.Textbox(label="Screenplay Summary")
-            gr.Markdown(
-        """
-        # Chunking Strategy Illustration
-        ![](file/img/stride-explain-2.png)
-        """)
-    '''
-    with gr.Row():
-        gr.Markdown(
-    """
-    # Chunking strategy
-    ![](file/img/stride-explain.png)
-    """)
-    '''
+            script_summary_output = gr.Textbox(label="Document Summary")
+            
     btn_summary.click(fn=summarize_script,
                       inputs=[out, temperature, prompt, chunk_size, overlap, max_tokens],
                       outputs=script_summary_output)
